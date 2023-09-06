@@ -1,0 +1,345 @@
+# Install and load necessary packages
+install.packages(c("ggplot2", "dplyr", "tidyr", "lubridate", "forcats", "corrplot", "GGally", "caret"))
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(forcats)
+library(corrplot)
+library(GGally)
+library(caret)
+
+crop_data <- read.csv("gujarat-cr.csv") # loads data
+
+# Overview of the dataset
+head(crop_data)
+summary(crop_data)
+
+
+colSums(is.na(crop_data)) # Checking for missing values
+
+crop_data$Area <- ifelse(
+  is.na(crop_data$Area),
+  mean(crop_data$Area, na.rm = TRUE),
+  crop_data$Area
+)
+
+# Production
+crop_data$Production <- ifelse(
+  is.na(crop_data$Production),
+  mean(crop_data$Production, na.rm = TRUE),
+  crop_data$Production
+)
+
+# For categorical variables (State_Name, District_Name, Crop_Year, Season, and Crop)
+
+mode_function <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+crop_data$State_Name <- ifelse(
+  is.na(crop_data$State_Name),
+  mode_function(crop_data$State_Name),
+  crop_data$State_Name
+)
+
+crop_data$District_Name <- ifelse(
+  is.na(crop_data$District_Name),
+  mode_function(crop_data$District_Name),
+  crop_data$District_Name
+)
+
+crop_data$Crop_Year <- ifelse(
+  is.na(crop_data$Crop_Year),
+  mode_function(crop_data$Crop_Year),
+  crop_data$Crop_Year
+)
+
+crop_data$Season <- ifelse(
+  is.na(crop_data$Season),
+  mode_function(crop_data$Season),
+  crop_data$Season
+)
+
+crop_data$Crop <- ifelse(
+  is.na(crop_data$Crop),
+  mode_function(crop_data$Crop),
+  crop_data$Crop
+)
+
+# Handling outliers for Area
+
+Q1 <- quantile(crop_data$Area, 0.25)
+Q3 <- quantile(crop_data$Area, 0.75)
+IQR <- Q3 - Q1
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+crop_data <- crop_data %>%
+  filter(Area >= lower_bound & Area <= upper_bound)
+
+# Data transformation for Production
+
+crop_data$Production <- log(crop_data$Production + 1)
+
+crop_data$Area <- ifelse(
+  is.na(crop_data$Area),
+  mean(crop_data$Area, na.rm = TRUE),
+  crop_data$Area
+)
+
+crop_data$Production <- ifelse(
+  is.na(crop_data$Production),
+  mean(crop_data$Production, na.rm = TRUE),
+  crop_data$Production
+)
+
+# For categorical variables: State_Name, District_Name, Crop_Year, Season, and Crop
+
+mode_function <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+# Using lapply for brevity
+categorical_columns <- c("State_Name", "District_Name", "Crop_Year", "Season", "Crop")
+crop_data[categorical_columns] <- lapply(crop_data[categorical_columns], function(col) {
+  ifelse(is.na(col), mode_function(col), col)
+})
+
+# Handling outliers for Area
+
+Q1 <- quantile(crop_data$Area, 0.25)
+Q3 <- quantile(crop_data$Area, 0.75)
+IQR <- Q3 - Q1
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+crop_data <- crop_data %>%
+  filter(Area >= lower_bound & Area <= upper_bound)
+
+# Data transformation for Production
+
+crop_data$Production <- log(crop_data$Production + 1)
+
+# Distribution of Crops
+ggplot(crop_data, aes(Crop)) + geom_bar(fill = "lightblue") + theme_minimal() + coord_flip()
+
+summary(crop_data)
+# Visualization for Area
+#ggplot(crop_data, aes(Area)) + geom_bar(fill = "lightblue") + theme_minimal() + coord_flip()
+
+crop_season <- crop_data %>%
+  count(Season)
+
+ggplot(crop_season, aes(x = "", y = n, fill = Season)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  labs(title = "Distribution of Seasons") +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5))
+
+#Variability in the production of jowar across districts:
+jowar_data <- crop_data %>% filter(Crop == "Jowar") %>%
+  group_by(District_Name) %>%
+  summarise(Variability = sd(Production, na.rm = TRUE))
+
+print(jowar_data)
+
+# Plot
+ggplot(jowar_data, aes(x = District_Name, y = Variability)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Variability in Jowar Production Across Districts")
+
+# Filter the dataset for Cotton(lint)
+cotton_data_all <- crop_data %>%
+  filter(Crop == "Cotton(lint)")
+
+# Find top 4 districts in terms of total cotton production
+top_districts <- cotton_data_all %>%
+  group_by(District_Name) %>%
+  summarise(Total_Production = sum(Production, na.rm = TRUE)) %>%
+  arrange(-Total_Production) %>%
+  head(4) %>%
+  pull(District_Name)
+
+# Filter the data to keep only the top 5 districts
+cotton_data_top5 <- cotton_data_all %>%
+  filter(District_Name %in% top_districts)
+
+# Perform one-way ANOVA to compare means of production for the top 5 districts
+anova_result <- aov(Production ~ District_Name, data = cotton_data_top5)
+summary(anova_result)
+
+# Visualzation
+library(ggplot2)
+ggplot(cotton_data_top5, aes(x = District_Name, y = Production, fill = District_Name)) +
+  geom_boxplot() +
+  labs(title = "Cotton Production by District", x = "District", y = "Production") +
+  theme_minimal()
+
+#Correlation Analysis
+# Top 5 crops in terms of production
+top_crops <- crop_data %>%
+  group_by(Crop) %>%
+  summarise(Total_Production = sum(Production, na.rm = TRUE)) %>%
+  arrange(-Total_Production) %>%
+  head(5)
+
+print(top_crops)
+
+# Production trend of top crop over the years
+top_crop_over_years <- crop_data %>%
+  filter(Crop == top_crops$Crop[1]) %>%
+  group_by(Crop_Year) %>%
+  summarise(Total_Production = sum(Production, na.rm = TRUE))
+
+top_5_crop_data <- crop_data %>%
+  filter(Crop %in% top_crops$Crop)
+
+#ggplot(top_crop_over_years, aes(x = Crop_Year, y = Total_Production)) +
+# geom_line() +
+#labs(title = paste("Production Trend of", top_crops$Crop[1]), x = "Year", y = "Total Production")
+
+correlation_matrix <- top_5_crop_data %>%
+  group_by(Crop) %>%
+  summarise(correlation = cor(Area, Production))
+
+print(correlation_matrix)
+ggplot(correlation_matrix, aes(x = Crop, y = correlation, fill = Crop)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Correlation between Area and Production for Top 5 Crops", x = "Crop", y = "Correlation Coefficient")
+
+# Correlation between Area and Production
+cor_matrix <- cor(crop_data$Area, crop_data$Production, use="complete.obs")
+print(cor_matrix)
+
+# Visual representation
+ggplot(crop_data, aes(x = Area, y = Production)) +
+  geom_point(aes(color = Crop), alpha = 0.5) +  # added alpha for better visualization in case of many overlapping points
+  geom_smooth(method = "lm") +
+  labs(title = "Correlation between Area and Production", x = "Area", y = "Production") +
+  theme_minimal()
+
+# Assuming your data frame is now named crop_data
+clean_data <- crop_data[!is.na(crop_data$Production), ]
+
+# Convert the Crop_Year column to numeric
+if(!is.numeric(clean_data$Crop_Year)) {
+  clean_data$Crop_Year <- as.numeric(as.character(clean_data$Crop_Year))
+}
+
+# Aggregate the Production by Year
+agg_data <- clean_data %>%
+  group_by(Crop_Year) %>%
+  summarise(Total_Production = sum(as.numeric(as.character(Production)))) %>%
+  ungroup()
+
+# Convert Aggregated Data to Time Series
+time_series <- ts(agg_data$Total_Production, start = min(agg_data$Crop_Year), end = max(agg_data$Crop_Year), frequency = 1)
+
+# Printing the total production for each year
+for(i in 1:nrow(agg_data)) {
+  cat(paste("Year:", agg_data$Crop_Year[i], "- Total Production:", agg_data$Total_Production[i]), "\n")
+}
+
+# Plotting with ggplot2
+ggplot(agg_data, aes(x=Crop_Year, y=Total_Production)) +
+  geom_bar(stat="identity", fill="steelblue") +
+  labs(title="Yearly Production Bar Chart", x="Year", y="Total Production") +
+  theme_minimal()
+
+# Sample data preparation
+agg_data_crops_top <- clean_data %>%
+  filter(Crop %in% top_crops$Crop) %>%
+  group_by(Crop_Year, Crop) %>%
+  summarise(Total_Production = sum(Production)) %>%
+  ungroup()
+
+ggplot(agg_data_crops_top, aes(x=Crop_Year, y=Total_Production)) +
+  geom_line(color="steelblue") +
+  facet_wrap(~Crop, scales = "free_y") +
+  labs(title="Yearly Production for Top Crops", x="Year", y="Total Production") +
+  theme_minimal()
+
+heatmap_data <- crop_data %>%
+  group_by(District_Name, Crop_Year) %>%
+  summarize(Total_Production = sum(Production, na.rm = TRUE)) %>%
+  ungroup()
+
+
+# Plotting
+ggplot(heatmap_data, aes(x = Crop_Year, y = District_Name, fill = Total_Production)) +
+  geom_tile() +
+  labs(title = "Total Crop Production by District and Year",
+       x = "Year", y = "District") +
+  theme_minimal() +
+  scale_fill_gradient(low = "blue", high = "red")
+
+# First, filter the dataset to only get data for "Cotton(lint)"
+cotton_data <- crop_data %>%
+  filter(Crop == "Cotton(lint)")
+
+# Conducting ANOVA
+anova_result <- aov(Production ~ District_Name, data = cotton_data)
+summary(anova_result)
+
+# Post-hoc analysis using Tukey's HSD test
+#tukey_result <- TukeyHSD(anova_result)
+#print(tukey_result)
+
+# Total production for each crop
+total_production <- crop_data %>% group_by(Crop) %>% summarise(total_production = sum(Production, na.rm = TRUE))
+print(total_production)
+
+# Visual representation for the total production of top 8 crops with individual colors
+top8_crops <- total_production %>% top_n(8, wt = total_production)
+
+ggplot(top8_crops, aes(x = Crop, y = total_production, fill = Crop)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label=sprintf("%.2f", total_production)), vjust=-0.5) +  # Displaying values on the bar chart
+  labs(title = "Top 8 Crops by Total Production", y = "Production") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set3")  # using Color Brewer palette for varied colors
+
+# Filtering the data to keep only the top 8 crops in terms of total production
+top8_crops_list <- total_production %>%
+  top_n(8, wt = total_production) %>%
+  pull(Crop)
+
+filtered_data <- crop_data %>%
+  filter(Crop %in% top8_crops_list)
+
+# Boxplot for production distribution of top 8 crops
+ggplot(filtered_data, aes(x = Crop, y = Production, fill = Crop)) +
+  geom_boxplot() +
+  labs(title = "Production Distribution for Top 8 Crops", y = "Production") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set3")  # using Color Brewer palette for varied colors
+
+#Regression to predict production based on area (for Rice as an example):
+rice_data <- crop_data[crop_data$Crop == "Rice",]
+lm_model <- lm(Production ~ Area, data = rice_data)
+summary(lm_model)
+
+# Plot
+ggplot(rice_data, aes(x = Area, y = Production)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Regression: Rice Production vs. Area")
+
+top_production_values <- agg_data_crops_top %>%
+  group_by(Crop) %>%
+  filter(Total_Production == max(Total_Production)) %>%
+  ungroup()
+
+# Plotting
+ggplot(agg_data_crops_top, aes(x=Crop_Year, y=Total_Production)) +
+  geom_line(color="steelblue") +
+  geom_text(data = top_production_values, aes(label=round(Total_Production, 2)), vjust=-0.5, color="black", size=3.5) +
+  facet_wrap(~Crop, scales = "free_y") +
+  labs(title="Yearly Production for Top Crops", x="Year", y="Total Production") +
+  theme_minimal()
